@@ -2,4 +2,7 @@ import { defineCloudflareConfig } from "@opennextjs/cloudflare";
 
 export default defineCloudflareConfig({
   /* config options here */
+  edgeExternals: true,
+  minify: true,
 });
+
