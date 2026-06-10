@@ -39,3 +39,14 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# open-next
+.open-next
+
+# build outputs
+cloudflare-deploy
+deploy-final
+.vercel
+
+deploy-fix
+cloudflare-deploy
