@@ -39,7 +39,9 @@ export async function POST(req: Request) {
           sendLog(`Processando grupo do ${entityType === 'contacts' ? 'Contato' : 'Lead'} Principal ID ${primary.id}...`, "info");
           
           // 1. Unificar tags e Campos Personalizados no Principal
-          let newTags = [...(primary._embedded?.tags || [])];
+          // A API do Kommo só aceita { id } (ou { name }) ao gravar tags; reenviar
+          // o objeto completo (que inclui "color") causa FieldNotExpected.
+          let newTags = (primary._embedded?.tags || []).map((t: any) => ({ id: t.id }));
           let primaryFields = [...(primary.custom_fields_values || [])];
           let hasChanges = false;
           let fieldsToUpdate: any[] = [];

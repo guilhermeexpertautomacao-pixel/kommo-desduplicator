@@ -77,8 +77,10 @@ export async function POST(req: Request) {
             
             const updatePayload = batch.map((lead: any) => {
               const currentTags = lead._embedded?.tags || [];
-              const newTags = [...currentTags];
-              if (!newTags.find((t: any) => t.name === tagName)) {
+              // A API do Kommo só aceita { id } (ou { name }) ao gravar tags.
+              // Reenviar o objeto completo (que inclui "color") causa FieldNotExpected.
+              const newTags = currentTags.map((t: any) => ({ id: t.id }));
+              if (!currentTags.find((t: any) => t.name === tagName)) {
                 newTags.push({ name: tagName });
               }
               return {
