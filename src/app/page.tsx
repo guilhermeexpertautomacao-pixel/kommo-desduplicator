@@ -21,6 +21,8 @@ export default function Home() {
   const [selectedPipeline, setSelectedPipeline] = useState<string>("");
   const [statusMap, setStatusMap] = useState<Record<number, number>>({});
   const logsEndRef = useRef<HTMLDivElement>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  const stopRef = useRef(false);
 
   // Limpeza States
   const [cleanupCreatedValue, setCleanupCreatedValue] = useState("1");
@@ -36,6 +38,12 @@ export default function Home() {
 
   const addLog = (message: string, type: LogEntry["type"] = "info") => {
     setLogs((prev) => [...prev, { id: Date.now() + Math.random(), message, type }]);
+  };
+
+  const handleStop = () => {
+    stopRef.current = true;
+    abortRef.current?.abort();
+    addLog("Interrupção solicitada. Aguardando o lote atual finalizar...", "warning");
   };
 
   const normalizePhone = (digitsOnly: string) => {
@@ -204,7 +212,10 @@ export default function Home() {
 
     setIsRunning(true);
     setStatus("running");
-    
+    stopRef.current = false;
+    abortRef.current = new AbortController();
+    const signal = abortRef.current.signal;
+
     if (action === "analyze") {
       setLogs([]);
       setDuplicatesCount(null);
@@ -221,9 +232,10 @@ export default function Home() {
         const queryParams = `?subdomain=${subdomain}&token=${token}&page=${page}${mode === 'leads' ? `&pipeline_id=${selectedPipeline}&entity=leads` : ''}`;
 
         while (hasMore) {
+          if (stopRef.current) { addLog("Busca interrompida pelo usuário.", "warning"); break; }
           addLog(`Buscando ${mode === 'contacts' ? 'contatos' : 'leads'}, página ${page}...`);
           const url = `/api/contacts?subdomain=${subdomain}&token=${token}&page=${page}${mode === 'leads' ? `&pipeline_id=${selectedPipeline}&entity=leads` : ''}`;
-          const res = await fetch(url);
+          const res = await fetch(url, { signal });
           if (!res.ok) {
             const errData = await res.json();
             throw new Error(errData.error || "Erro ao buscar dados");
@@ -250,10 +262,11 @@ export default function Home() {
           if (idsArray.length > 0) {
             const batchSize = 250;
             for (let i = 0; i < idsArray.length; i += batchSize) {
+              if (stopRef.current) { addLog("Enriquecimento interrompido pelo usuário.", "warning"); break; }
               const batch = idsArray.slice(i, i + batchSize);
               addLog(`Enriquecendo telefones: Lote ${Math.floor(i/batchSize) + 1} de ${Math.ceil(idsArray.length/batchSize)}...`);
-              
-              const res = await fetch(`/api/contacts?subdomain=${subdomain}&token=${token}&ids=${batch.join(",")}`);
+
+              const res = await fetch(`/api/contacts?subdomain=${subdomain}&token=${token}&ids=${batch.join(",")}`, { signal });
               if (res.ok) {
                 const data = await res.json();
                 (data.contacts || []).forEach((c: any) => {
@@ -308,8 +321,13 @@ export default function Home() {
         setStatus("success");
         setIsRunning(false);
       } catch (error: any) {
-        addLog(`Erro na busca: ${error.message}`, "error");
-        setStatus("error");
+        if (error.name === "AbortError" || stopRef.current) {
+          addLog("Busca interrompida pelo usuário.", "warning");
+          setStatus("idle");
+        } else {
+          addLog(`Erro na busca: ${error.message}`, "error");
+          setStatus("error");
+        }
         setIsRunning(false);
       }
     } else {
@@ -319,17 +337,19 @@ export default function Home() {
         // Processar em lotes de 10 grupos para evitar timeouts e limites
         const batchSize = 3;
         for (let i = 0; i < contactGroups.length; i += batchSize) {
+          if (stopRef.current) { addLog("Merge interrompido pelo usuário.", "warning"); break; }
           const batch = contactGroups.slice(i, i + batchSize);
           addLog(`Processando lote ${Math.floor(i/batchSize) + 1} de ${Math.ceil(contactGroups.length/batchSize)}...`, "info");
-          
+
           const response = await fetch("/api/deduplicate", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ subdomain, token, groups: batch, entityType: mode }),
+            signal,
           });
 
           if (!response.body) throw new Error("Sem resposta do servidor");
-          
+
           const reader = response.body.getReader();
           const decoder = new TextDecoder();
           while (true) {
@@ -343,12 +363,19 @@ export default function Home() {
             }
           }
         }
-        
-        addLog("Merge concluído com sucesso em todos os lotes!", "success");
-        setStatus("success");
+
+        if (!stopRef.current) {
+          addLog("Merge concluído com sucesso em todos os lotes!", "success");
+          setStatus("success");
+        }
       } catch (error: any) {
-        addLog(`Erro no merge: ${error.message}`, "error");
-        setStatus("error");
+        if (error.name === "AbortError" || stopRef.current) {
+          addLog("Merge interrompido pelo usuário.", "warning");
+          setStatus("idle");
+        } else {
+          addLog(`Erro no merge: ${error.message}`, "error");
+          setStatus("error");
+        }
       } finally {
         setIsRunning(false);
       }
@@ -362,6 +389,9 @@ export default function Home() {
     }
     setIsRunning(true);
     setStatus("running");
+    stopRef.current = false;
+    abortRef.current = new AbortController();
+    const signal = abortRef.current.signal;
     setLogs([]);
     setCleanupLeads([]);
     addLog("Iniciando busca de leads inativos...", "info");
@@ -386,9 +416,10 @@ export default function Home() {
       let hasMore = true;
 
       while (hasMore) {
+        if (stopRef.current) { addLog("Busca interrompida pelo usuário.", "warning"); break; }
         addLog(`Buscando leads inativos, página ${page}...`);
         const url = `/api/cleanup?subdomain=${subdomain}&token=${token}&page=${page}&createdBefore=${createdBefore}&updatedBefore=${updatedBefore}`;
-        const res = await fetch(url);
+        const res = await fetch(url, { signal });
         if (!res.ok) throw new Error("Erro ao buscar dados");
         const data = await res.json();
         allItems = allItems.concat(data.leads || []);
@@ -399,10 +430,16 @@ export default function Home() {
       setCleanupLeads(allItems);
       addLog(`Busca finalizada. Encontrados ${allItems.length} leads inativos.`, "success");
       setHasAnalyzed(true);
-      setStatus("success");
+      if (!stopRef.current) setStatus("success");
+      else setStatus("idle");
     } catch (error: any) {
-      addLog(`Erro na busca: ${error.message}`, "error");
-      setStatus("error");
+      if (error.name === "AbortError" || stopRef.current) {
+        addLog("Busca interrompida pelo usuário.", "warning");
+        setStatus("idle");
+      } else {
+        addLog(`Erro na busca: ${error.message}`, "error");
+        setStatus("error");
+      }
     } finally {
       setIsRunning(false);
     }
@@ -412,6 +449,9 @@ export default function Home() {
     if (!cleanupLeads.length) return;
     setIsRunning(true);
     setStatus("running");
+    stopRef.current = false;
+    abortRef.current = new AbortController();
+    const signal = abortRef.current.signal;
     addLog(`Iniciando aplicação da tag "${cleanupTag}" em ${cleanupLeads.length} leads...`, "warning");
 
     try {
@@ -419,13 +459,15 @@ export default function Home() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ subdomain, token, leads: cleanupLeads, tagName: cleanupTag }),
+        signal,
       });
 
       if (!response.body) throw new Error("Sem resposta do servidor");
-      
+
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       while (true) {
+        if (stopRef.current) { await reader.cancel(); addLog("Tagueamento interrompido pelo usuário.", "warning"); break; }
         const { value, done } = await reader.read();
         if (done) break;
         const chunk = decoder.decode(value, { stream: true });
@@ -435,10 +477,16 @@ export default function Home() {
           addLog(data.message, data.type);
         }
       }
-      setStatus("success");
+      if (!stopRef.current) setStatus("success");
+      else setStatus("idle");
     } catch (error: any) {
-      addLog(`Erro ao aplicar tag: ${error.message}`, "error");
-      setStatus("error");
+      if (error.name === "AbortError" || stopRef.current) {
+        addLog("Tagueamento interrompido pelo usuário.", "warning");
+        setStatus("idle");
+      } else {
+        addLog(`Erro ao aplicar tag: ${error.message}`, "error");
+        setStatus("error");
+      }
     } finally {
       setIsRunning(false);
     }
@@ -704,6 +752,18 @@ export default function Home() {
             </div>
 
             <div style={{ display: "flex", gap: "12px" }}>
+              {isRunning && (
+                <button
+                  className="btn"
+                  onClick={handleStop}
+                  style={{ background: "var(--error)", borderColor: "var(--error)", color: "white", display: "flex", alignItems: "center", gap: "8px" }}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                    <rect x="6" y="6" width="12" height="12" rx="2"></rect>
+                  </svg>
+                  Parar
+                </button>
+              )}
               {mode === "cleanup" ? (
                 <>
                   <button 

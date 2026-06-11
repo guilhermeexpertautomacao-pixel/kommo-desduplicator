@@ -43,6 +43,9 @@ next-env.d.ts
 # open-next
 .open-next
 
+# wrangler
+.wrangler
+
 # build outputs
 cloudflare-deploy
 deploy-final
